@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+
+  # ── Ollama (local LLM server) ──────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mmads_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── Model bootstrap (pulls required models on first run) ───────────────
+  ollama_init:
+    image: ollama/ollama:latest
+    container_name: mmads_ollama_init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: >
+      sh -c "
+        ollama pull qwen2.5:7b &&
+        ollama pull llava:7b &&
+        ollama pull nomic-embed-text &&
+        echo 'All models pulled successfully'
+      "
+    restart: "no"
+
+  # ── MMADS API ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: mmads_api
+    depends_on:
+      ollama:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - PLANNER_MODEL=ollama/qwen2.5:7b
+      - CODER_MODEL=ollama/qwen2.5:7b
+      - REVIEWER_MODEL=ollama/qwen2.5:7b
+      - VISION_MODEL=ollama/llava:7b
+      - EMBED_MODEL=ollama/nomic-embed-text
+      - CHROMA_PERSIST_DIR=/app/data/chroma
+      - FAISS_INDEX_DIR=/app/data/faiss
+      - WORKING_DIR=/app/agentic_output
+      - LOG_LEVEL=INFO
+      - MAX_ITERATIONS=10
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    volumes:
+      - chroma_data:/app/data/chroma
+      - faiss_data:/app/data/faiss
+      - output_data:/app/agentic_output
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  chroma_data:
+  faiss_data:
+  output_data:
